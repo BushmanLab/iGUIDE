@@ -111,7 +111,7 @@ if( !args$quiet ){
 # Load dependancies ----
 if( !args$quiet ) cat("\nLoading dependencies.\n")
 
-add_packs <- c("magrittr", "knitr")
+add_packs <- c("magrittr", "knitr", "iguideSupport")
 
 add_packs_loaded <- suppressMessages(
   sapply(add_packs, require, character.only = TRUE)
@@ -131,15 +131,6 @@ if( !all(add_packs_loaded) ){
   stop("Check dependancies.\n")
   
 }
-
-code_dir <- dirname(sub(
-  pattern = "--file=", 
-  replacement = "", 
-  x = grep("--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
-))
-
-source(file.path(code_dir, "supporting_scripts/iguide_support.R"))
-source(file.path(code_dir, "supporting_scripts/nucleotideScoringMatrices.R"))
 
 
 # Import metadata and consolidate objects ----
@@ -307,22 +298,8 @@ max_target_mismatch <- configs[[1]]$maxTargetMismatch
 
 ## Combine sampleInfo files
 
-sample_info <- dplyr::bind_rows(lapply(
-    sapply(configs, "[[", "Sample_Info"), 
-    function(x){
-      
-      if( file.exists(file.path(root_dir, x)) ){
-        return(data.table::fread(file.path(root_dir, x), data.table = FALSE))
-      }else if( file.exists(x) ){
-        return(data.table::fread(x, data.table = FALSE))
-      }else{
-        stop("\n  Cannot find Sample_Info: ", x, ".\n")
-      }
-
-    }
-  ), 
-  .id = "run_set"
-)
+sample_info <- lapply(configs, loadSampleInfo, root_dir) %>%
+  dplyr::bind_rows(.id = "run_set")
 
 sample_name_col <- unique(sapply(configs, "[[", "Sample_Name_Column"))
 
@@ -386,66 +363,37 @@ on_targets <- unlist(lapply(configs, "[[", "On_Target_Sites")) %>%
 
 
 ## Treatment across runs
-treatments <- lapply(configs, "[[", "Treatment")
+treatment_df <- lapply(configs, getTreatmentInfo, root_dir) %>%
+  dplyr::bind_rows(.id = "run_set") %>%
+  dplyr::filter(specimen %in% specimen_levels) %>%
+  dplyr::mutate(specimen = factor(specimen, levels = specimen_levels)) %>%
+  dplyr::arrange(specimen)
 
-if( any(grepl("sampleInfo:", treatments[[1]])) ){
+### If only one condition present besides 'Mock', then switch 'Mock' treated
+### specimens to condition for analysis background
+### This block of code may not be appropriate for all circumstances.
+if( any(tolower(treatment_df$treatment) == "mock") ){
   
-  info_col <- match(
-    stringr::str_extract(string = treatments[[1]], pattern = "[\\w]+$"), 
-    names(sample_info)
-  )
+  all_treatments <- unique(unlist(strsplit(treatment_df$treatment, ";")))
   
-  if( length(info_col) != 1 ){
-    stop("\n  Cannot parse treatment data. Check config yaml and sampleInfo.\n")
-  }
+  all_treatments <- all_treatments[
+    !grepl("mock", tolower(all_treatments))
+  ]
   
-  treatment_df <- data.frame(
-      run_set = sample_info$run_set,
-      sampleName = sample_info[,sample_name_col], 
-      treatment = sample_info[,info_col]
-    ) %>%
-    dplyr::mutate(
-      specimen = stringr::str_extract(string = sampleName, pattern = "[\\w]+")
-    ) %>%
-    dplyr::filter(specimen %in% specimen_levels) %>%
-    dplyr::mutate(specimen = factor(specimen, levels = specimen_levels)) %>%
-    dplyr::distinct(run_set, specimen, treatment) %>%
-    dplyr::arrange(specimen) %>%
-    dplyr::mutate(treatment = ifelse(is.na(treatment), "Mock", treatment)) %>%
-    dplyr::select(run_set, specimen, treatment)
-  
-  treatment <- strsplit(treatment_df$treatment, ";")
-  names(treatment) <- as.character(treatment_df$specimen)
-  
-}else if( any(grepl("all", names(treatments[[1]]))) ){
-  
-  treatment_df <- data.frame(
-      run_set = sample_info$run_set,
-      sampleName = sample_info[,sample_name_col], 
-      treatment = unique(unlist(treatments))
-    ) %>%
-    dplyr::mutate(
-      specimen = stringr::str_extract(string = sampleName, pattern = "[\\w]+")
-    ) %>%
-    dplyr::filter(specimen %in% specimen_levels) %>%
-    dplyr::mutate(specimen = factor(specimen, levels = specimen_levels)) %>%
-    dplyr::distinct(run_set, specimen, treatment) %>%
-    dplyr::arrange(specimen) %>%
-    dplyr::mutate(treatment = ifelse(is.na(treatment), "Mock", treatment)) %>%
-    dplyr::select(run_set, specimen, treatment)
-  
-  treatment <- strsplit(treatment_df$treatment, ";")
-  names(treatment) <- treatment_df$specimen
-  
-}else{
-  
-  stop(
-    "\n  Treatment information not accurately parsed from config(s).\n", 
-    "  Check config(s) formating.\n"
+  treatment_df$treatment <- ifelse(
+    tolower(treatment_df$treatment) == "mock", 
+    paste(all_treatments, collapse = ";"), 
+    treatment_df$treatment
   )
   
 }
 
+
+treatment <- structure(
+  strsplit(treatment_df$treatment, ";"), 
+  names = as.character(treatment_df$specimen)
+)
+  
 
 ## Nucleases used across runs
 nuc_profiles <- unlist(
@@ -457,66 +405,38 @@ nuc_profiles <- nuc_profiles[
   match(unique(names(nuc_profiles)), names(nuc_profiles))
 ]
 
-nucleases <- lapply(configs, "[[", "Nuclease")
+nuclease_df <- lapply(configs, getNucleaseInfo, root_dir) %>%
+  dplyr::bind_rows(.id = "run_set") %>%
+  dplyr::filter(specimen %in% specimen_levels) %>%
+  dplyr::mutate(specimen = factor(specimen, levels = specimen_levels)) %>%
+  dplyr::arrange(specimen)
 
-if( any(grepl("sampleInfo:", nucleases[[1]])) ){
+### If only one condition present besides 'Mock', then switch 'Mock' treated
+### specimens to condition for analysis background
+### This block of code may not be appropriate for all circumstances.
+if( any(tolower(nuclease_df$nuclease) == "mock") ){
   
-  info_col <- match(
-    stringr::str_extract(string = nucleases[[1]], pattern = "[\\w]+$"), 
-    names(sample_info)
-  )
+  all_nucleases <- unique(unlist(strsplit(nuclease_df$nuclease, ";")))
   
-  if( length(info_col) != 1 ){
-    stop("Cannot parse nuclease data. Check config yaml and sampleInfo.")
-  }
+  all_nucleases <- all_nucleases[
+    !grepl("mock", tolower(all_nuclease))
+  ]
   
-  nuclease_df <- data.frame(
-    run_set = sample_info$run_set,
-    sampleName = sample_info[,sample_name_col], 
-    nuclease = sample_info[,info_col]
-    ) %>%
-    dplyr::mutate(
-      specimen = stringr::str_extract(string = sampleName, pattern = "[\\w]+")
-    ) %>%
-    dplyr::filter(specimen %in% specimen_levels) %>%
-    dplyr::mutate(specimen = factor(specimen, levels = specimen_levels)) %>%
-    dplyr::distinct(run_set, specimen, nuclease) %>%
-    dplyr::arrange(specimen) %>%
-    dplyr::mutate(nuclease = ifelse(is.na(nuclease), "Mock", nuclease)) %>%
-    dplyr::select(run_set, specimen, nuclease)
-  
-  nuclease <- strsplit(nuclease_df$nuclease, ";")
-  names(nuclease) <- nuclease_df$specimen
-  
-}else if( any(grepl("all", names(nucleases[[1]]))) ){
-  
-  nuclease_df <- data.frame(
-    run_set = sample_info$run_set,
-    sampleName = sample_info[,sample_name_col], 
-    nuclease = unique(unlist(nucleases))
-    ) %>%
-    dplyr::mutate(
-      specimen = stringr::str_extract(string = sampleName, pattern = "[\\w]+")
-    ) %>%
-    dplyr::filter(specimen %in% specimen_levels) %>%
-    dplyr::mutate(specimen = factor(specimen, levels = specimen_levels)) %>%
-    dplyr::distinct(run_set, specimen, nuclease) %>%
-    dplyr::arrange(specimen) %>%
-    dplyr::mutate(nuclease = ifelse(is.na(nuclease), "Mock", nuclease)) %>%
-    dplyr::select(run_set, specimen, nuclease)
-  
-  nuclease <- strsplit(nuclease_df$nuclease, ";")
-  names(nuclease) <- nuclease_df$specimen
-  
-}else{
-  
-  stop(
-    "\n  Nuclease information not accurately parsed from config(s).\n", 
-    "  Check config(s) formating.\n"
+  nuclease_df$nuclease <- ifelse(
+    tolower(nuclease_df$nuclease) == "mock", 
+    paste(all_nucleases, collapse = ";"), 
+    nuclease_df$nuclease
   )
   
 }
 
+nuclease <- structure(
+  strsplit(nuclease_df$nuclease, ";"), 
+  names = as.character(nuclease_df$specimen)
+)
+
+
+## Combine treatment and nuclease profiles
 nuclease_treaments <- dplyr::left_join(
   nuclease_df, treatment_df, by = c("run_set", "specimen")
 )
@@ -640,25 +560,23 @@ cond_overview <- spec_overview %>%
 if( !args$quiet ) cat("\nStarting analysis...\n")
 
 ## Read in experimental data and contatenate different sets
-input_data_paths <- lapply(configs, function(x){
-  name <- x$Run_Name
-  file.path(
-    "analysis", name, paste0("output/incorp_sites.", name ,".rds")
-  )
-})
-
-input_data <- lapply(input_data_paths, function(x){
-  if( file.exists(file.path(root_dir, x)) ){
-    return(readRDS(file.path(root_dir, x)))
-  }else if( file.exists(x) ){
-    return(readRDS(x))
-  }else{
-    stop("\n  Cannot find edited_sites file: ", x, ".\n")
-  }
-})
-
-names(input_data) <- names(configs)
-input_data <- dplyr::bind_rows(input_data, .id = "run.set") %>%
+input_data <- lapply(configs, function(x){
+    name <- x$Run_Name
+    
+    path <- file.path(
+      "analysis", name, paste0("output/incorp_sites.", name ,".rds")
+    )
+    
+    if( file.exists(file.path(root_dir, path)) ){
+      return(readRDS(file.path(root_dir, path)))
+    }else if( file.exists(path) ){
+      return(readRDS(path))
+    }else{
+      stop("\n  Cannot find edited_sites file: ", x, ".\n")
+    }
+    
+  }) %>%
+  dplyr::bind_rows(.id = "run.set") %>%
   dplyr::mutate(
     specimen = stringr::str_extract(sampleName, pattern = "[\\w]+")
   ) %>%
@@ -670,33 +588,23 @@ if( !multihit_option ){
 
 
 ## Format input alignments ----
-algnmts <- input_data
-
 ## Determine abundance metrics, with or without UMItags
-if( umitag_option ){
-  
-  algnmts <- dplyr::arrange(algnmts, desc(contrib)) %>%
-    dplyr::group_by(seqnames, start, end, strand, specimen, sampleName) %>%
-    dplyr::summarise(
-      count = sum(contrib),
-      umitag = sum(as.integer(!duplicated(umitag[!is.na(umitag)])) * contrib),
-      contrib = max(contrib)
-    ) %>%
-    dplyr::ungroup() %>%
-    as.data.frame()
-  
-}else{
-  
-  algnmts <- dplyr::arrange(algnmts, desc(contrib)) %>%
-    dplyr::group_by(seqnames, start, end, strand, specimen, sampleName) %>%
-    dplyr::summarize(
-      count = sum(contrib), 
-      contrib = max(contrib)
-    ) %>%
-    dplyr::ungroup() %>%
-    as.data.frame()
-  
-}
+algnmts_summaries <- list(
+  count = dplyr::quo(sum(contrib)),
+  umitag = if( umitag_option ){
+    dplyr::quo(sum(as.integer(!duplicated(umitag[!is.na(umitag)])) * contrib))
+  },
+  contrib = dplyr::quo(max(contrib))
+)
+
+algnmts_summaries <- algnmts_summaries[!sapply(algnmts_summaries, is.null)]
+
+algnmts <- input_data %>%
+  dplyr::arrange(desc(contrib)) %>%
+  dplyr::group_by(seqnames, start, end, strand, specimen, sampleName) %>%
+  dplyr::summarise(!!! algnmts_summaries) %>%
+  dplyr::ungroup() %>%
+  as.data.frame()
 
 ## Generate a sample table of the data for log purposes
 sample_index <- ifelse(nrow(algnmts) > 10, 10, nrow(algnmts))
@@ -722,19 +630,9 @@ algnmts_gr <- GenomicRanges::GRanges(
   seqinfo = GenomeInfoDb::seqinfo(ref_genome)
 )
 
-if( umitag_option ){
-  
-  GenomicRanges::mcols(algnmts_gr) <- dplyr::select(
-    algnmts, specimen, sampleName, count, umitag, contrib
-  )
-  
-}else{
-  
-  GenomicRanges::mcols(algnmts_gr) <- dplyr::select(
-    algnmts, specimen, sampleName, count, contrib
-  )
-  
-}
+GenomicRanges::mcols(algnmts_gr) <- dplyr::select(
+  algnmts, c(specimen, sampleName, count, if( umitag_option ) umitag, contrib)
+)
 
 # Analyze alignments ----
 ## Identify groups of alignments or pileups of aligned fragments
@@ -897,6 +795,19 @@ matched_algns <- probable_algns[
   probable_algns$target.match != "No_valid_match",
   ]
 
+matched_summaries <- list(
+  on.off.target = dplyr::quo(
+    paste(sort(unique(on.off.target)), collapse = ";")
+  ),
+  paired.algn = dplyr::quo(paste(sort(unique(paired.algn)), collapse = ";")),
+  count = dplyr::quo(sum(count)), 
+  umitag = if( umitag_option ) dplyr::quo(sum(umitag)),
+  algns = dplyr::quo(sum(contrib)),
+  orient = dplyr::quo(paste(sort(unique(as.character(strand))), collapse = ";"))
+)
+
+matched_summaries <- matched_summaries[!sapply(matched_summaries, is.null)]
+
 matched_summary <- matched_algns %>%
   dplyr::mutate(
     target.match = stringr::str_replace(
@@ -907,79 +818,38 @@ matched_summary <- matched_algns %>%
   ) %>%
   dplyr::group_by(
     specimen, edit.site, aligned.sequence, target.match, target.mismatch
-  )
-
-if( umitag_option ){
-  
-  matched_summary <- dplyr::summarise(
-    matched_summary,
-    on.off.target = paste(sort(unique(on.off.target)), collapse = ";"),
-    paired.algn = paste(sort(unique(paired.algn)), collapse = ";"),
-    count = sum(count), 
-    umitag = sum(umitag),
-    algns = sum(contrib),
-    orient = paste(sort(unique(as.character(strand))), collapse = ";")
-  )
-  
-}else{
-  
-  matched_summary <- dplyr::summarise(
-    matched_summary,
-    on.off.target = paste(sort(unique(on.off.target)), collapse = ";"),
-    paired.algn = paste(sort(unique(paired.algn)), collapse = ";"),
-    count = sum(count), 
-    algns = sum(contrib),
-    orient = paste(sort(unique(as.character(strand))), collapse = ";")
-  )
-  
-}
-
-matched_summary <- dplyr::ungroup(matched_summary) %>% 
+  ) %>%
+  dplyr::summarise(!!! matched_summaries) %>%
+  dplyr::ungroup() %>% 
   dplyr::arrange(specimen, target.match, desc(algns)) %>%
   as.data.frame()
 
 ## Paired alignments
 paired_algns <- probable_algns[
   probable_algns$paired.algn %in% names(tbl_paired_algn),
-  ]
+]
+
+paired_summaries <- list(
+  seqnames = dplyr::quo(unique(seqnames)),
+  start = dplyr::quo(min(pos)), 
+  end = dplyr::quo(max(pos)), 
+  mid = dplyr::quo(start + (end-start)/2),
+  strand = dplyr::quo("*"), 
+  width = dplyr::quo(end - start), 
+  count = dplyr::quo(sum(count)), 
+  umitag = if( umitag_option ) dplyr::quo(sum(umitag)), 
+  algns = dplyr::quo(sum(contrib))
+)
+
+paired_summaries <- paired_summaries[!sapply(paired_summaries, is.null)]
 
 paired_regions <- paired_algns %>%
   dplyr::group_by(specimen, paired.algn, strand) %>%
   dplyr::mutate(pos = ifelse(strand == "+", min(start), max(end))) %>%
-  dplyr::group_by(specimen, paired.algn)
-
-if( umitag_option ){
+  dplyr::group_by(specimen, paired.algn) %>%
+  dplyr::summarise(!!! paired_summaries) %>%
+  dplyr::ungroup()
   
-  paired_regions <- dplyr::summarise(
-    paired_regions,
-    seqnames = unique(seqnames),
-    start = min(pos), 
-    end = max(pos), 
-    mid = start + (end-start)/2,
-    strand = "*", 
-    width = end - start, 
-    count = sum(count), 
-    umitag = sum(umitag), 
-    algns = sum(contrib)
-  ) %>%
-    dplyr::ungroup()
-  
-}else{
-  
-  paired_regions <- dplyr::summarise(
-    paired_regions,
-    seqnames = unique(seqnames),
-    start = min(pos), 
-    end = max(pos), 
-    mid = start + (end-start)/2,
-    strand = "*", 
-    width = end - start, 
-    count = sum(count), 
-    algns = sum(contrib)
-  ) %>%
-    dplyr::ungroup()
-  
-}
 
 if( nrow(paired_regions) > 0 ){
   
@@ -1033,6 +903,18 @@ pile_up_algns <- probable_algns[
   probable_algns$clus.ori %in% names(tbl_clus_ori),
 ]
 
+pile_up_summaries <- list(
+  on.off.target = dplyr::quo(
+    paste(sort(unique(on.off.target)), collapse = ";")
+  ),
+  paired.algn = dplyr::quo(paste(sort(unique(paired.algn)), collapse = ";")),
+  count = dplyr::quo(sum(count)), 
+  umitag = if( umitag_option ) dplyr::quo(sum(umitag)),
+  algns = dplyr::quo(sum(contrib))
+)
+
+pile_up_summaries <- pile_up_summaries[!sapply(pile_up_summaries, is.null)]
+
 pile_up_summary <- pile_up_algns %>%
   dplyr::mutate(
     target.match = stringr::str_replace(
@@ -1041,32 +923,9 @@ pile_up_summary <- pile_up_algns %>%
       replacement = ""
     )
   ) %>%
-  dplyr::group_by(specimen, clus.ori)
-
-if( umitag_option ){
-  
-  pile_up_summary <- dplyr::summarise(
-    pile_up_summary,
-    on.off.target = paste(sort(unique(on.off.target)), collapse = ";"),
-    paired.algn = paste(sort(unique(paired.algn)), collapse = ";"),
-    count = sum(count), 
-    umitag = sum(umitag),
-    algns = sum(contrib)
-  )
-  
-}else{
-  
-  pile_up_summary <- dplyr::summarise(
-    pile_up_summary,
-    on.off.target = paste(sort(unique(on.off.target)), collapse = ";"),
-    paired.algn = paste(sort(unique(paired.algn)), collapse = ";"),
-    count = sum(count), 
-    algns = sum(contrib)
-  )
-  
-}
-
-pile_up_summary <- dplyr::ungroup(pile_up_summary) %>% 
+  dplyr::group_by(specimen, clus.ori) %>%
+  dplyr::summarise(!!! pile_up_summaries) %>%
+  dplyr::ungroup() %>% 
   dplyr::arrange(specimen, desc(algns)) %>%
   as.data.frame()
 
@@ -1117,26 +976,18 @@ if( args$stat != FALSE ){
 
 ## Specimen summary ----
 # Summarize components and append to specimen table
+tbl_algn_summaries <- list(
+  Reads = dplyr::quo(sum(count)), 
+  UMItags = if( umitag_option ) dplyr::quo(sum(umitag)), 
+  Alignments = dplyr::quo(sum(contrib))
+)
+
+tbl_algn_summaries <- tbl_algn_summaries[!sapply(tbl_algn_summaries, is.null)]
+
 tbl_algn_counts <- algnmts %>% 
   dplyr::mutate(specimen = factor(specimen, levels = specimen_levels)) %>%
-  dplyr::group_by(specimen)
-
-
-if( umitag_option ){
-  
-  tbl_algn_counts <- dplyr::summarise(
-    tbl_algn_counts, 
-    Reads = sum(count), UMItags = sum(umitag), Alignments = sum(contrib)
-  )
-  
-}else{
-  
-  tbl_algn_counts <- dplyr::summarise(
-    tbl_algn_counts, Reads = sum(count), Alignments = sum(contrib)
-  )
-  
-}
-
+  dplyr::group_by(specimen) %>%
+  dplyr::summarise(!!! tbl_algn_summaries)
 
 spec_overview <- dplyr::left_join(
   spec_overview, tbl_algn_counts, by = "specimen"
@@ -1512,6 +1363,13 @@ rand_df <- data.frame(
   "special" = sum(stringr::str_detect(rand_sites$gene_id, "!"))
 )
 
+ref_df <- data.frame(
+  condition = "--",
+  "total" = length(unique(ref_genes$annot_sym)),
+  "onco" = sum(unique(onco_genes) %in% ref_genes$annot_sym),
+  "special" = sum(unique(special_genes) %in% ref_genes$annot_sym)
+)
+
 paired_list <- split(
   x = paired_regions, 
   f = cond_overview$condition[
@@ -1559,7 +1417,7 @@ matched_df <- dplyr::bind_rows(
 
 enrich_df <- dplyr::bind_rows(
     list(
-      "Reference" = rand_df, 
+      "Reference" = ref_df, 
       "Flanking Pairs" = paired_df, 
       "Target Matched" = matched_df), 
     .id = "origin"
@@ -1571,14 +1429,20 @@ enrich_df$onco.p.value <- p.adjust(
     seq_len(nrow(enrich_df)), 
     function(i){
       
-      ref <- enrich_df[1, c("total", "onco")]
-      query <- enrich_df[i, c("total", "onco")]
+      ref <- enrich_df[1, c("total", "onco"), drop = TRUE]
+      query <- enrich_df[i, c("total", "onco"), drop = TRUE]
       ref$diff <- abs(diff(as.numeric(ref)))
       query$diff <- abs(diff(as.numeric(query)))
       
-      fisher.test(as.matrix(rbind(
-        ref[,c("diff", "onco")], query[,c("diff", "onco")]
-      )))$p.value
+      mat <- matrix(
+        c(
+          ref$total - ref$onco - query$total + query$onco,
+          query$diff, ref$onco - query$onco, query$onco
+        ),
+        nrow = 2
+      )
+      
+      fisher.test(mat)$p.value
       
     }
   ), 
@@ -1590,14 +1454,20 @@ enrich_df$special.p.value <- p.adjust(
     seq_len(nrow(enrich_df)), 
     function(i){
       
-      ref <- enrich_df[1, c("total", "special")]
-      query <- enrich_df[i, c("total", "special")]
+      ref <- enrich_df[1, c("total", "special"), drop = TRUE]
+      query <- enrich_df[i, c("total", "special"), drop = TRUE]
       ref$diff <- abs(diff(as.numeric(ref)))
       query$diff <- abs(diff(as.numeric(query)))
       
-      fisher.test(as.matrix(rbind(
-        ref[,c("diff", "special")], query[,c("diff", "special")]
-      )))$p.value
+      mat <- matrix(
+        c(
+          ref$total - ref$special - query$total + query$special,
+          query$diff, ref$special - query$special, query$special
+        ),
+        nrow = 2
+      )
+      
+      fisher.test(mat)$p.value
       
     }
   ), 
@@ -1607,22 +1477,22 @@ enrich_df$special.p.value <- p.adjust(
 enrich_df <- enrich_df %>%
   dplyr::mutate(
     onco.power = sapply(seq_len(n()), function(i){
-      
+
       statmod::power.fisher.test(
         p1 = onco[1] / total[1],
         p2 = onco[i] / total[i],
         n1 = total[1], n2 = total[i]
       )
-      
+
     }),
     special.power = sapply(seq_len(n()), function(i){
-      
+
       statmod::power.fisher.test(
         p1 = special[1] / total[1],
         p2 = special[i] / total[i],
         n1 = total[1], n2 = total[i]
       )
-      
+
     })
   ) %>%
   dplyr::select(
@@ -1650,7 +1520,7 @@ if( nrow(ft_MESL) > 0 ){
     dplyr::group_by(order) %>%
     dplyr::mutate(
       ESL = predictESProb(
-        x = edit.site.dist, density = on_tar_dens[[condition]]
+        z = edit.site.dist, density = on_tar_dens[[condition]]
       ),
       gene_id = matched_summary$gene_id[
         match(edit.site, matched_summary$edit.site)

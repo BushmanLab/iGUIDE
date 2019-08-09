@@ -13,8 +13,9 @@ def main( argv = sys.argv ):
         conda_prefix = os.environ.get("CONDA_PREFIX")
     except (KeyError, IndexError):
         raise SystemExit(
-            "Could not determine Conda prefix. Activate your iGUIDE "
-            "environment and try this command again.")
+            "\n  Could not determine Conda prefix. Activate your iGUIDE "
+            "\n  environment and try this command again.\n"
+        )
 
     usage_str = "\n  iguide %(prog)s <path/to/config.file> <options>"
     
@@ -39,12 +40,6 @@ def main( argv = sys.argv ):
         default = os.getenv("IGUIDE_DIR", os.getcwd()),
         help = "Path to iGUIDE installation")
 
-    parser.add_argument(
-        "--skip_demultiplexing", 
-        action = "count", 
-        help = "Use this option if your data is already demultiplexed."
-               " (Make sure Demulti_Dir is set in config file.)")
-
     # The remaining args will not be used
     args, remaining = parser.parse_known_args(argv)
 
@@ -66,7 +61,7 @@ def main( argv = sys.argv ):
     # Check for existing project directory
     if analysis_directory.exists():
         sys.stderr.write(
-            "Error: Project directory currently exists: '{}'.\n".format(
+            "\n  Error: Project directory currently exists: '{}'.\n".format(
                 str(analysis_directory)))
         sys.exit(1)
     else:
@@ -84,20 +79,23 @@ def main( argv = sys.argv ):
     # files.
     read_types = config["Read_Types"] 
      
-    if args.skip_demultiplexing:
+    if config['skipDemultiplexing']:
+        req_read_types = read_types[:]
+        req_read_types.remove("I1")
+        if not config["UMItags"]: req_read_types.remove("I2")
         try:
             sampleInfo = open(config['Sample_Info'])
         except FileNotFoundError:
             sampleInfo = open(
               os.getenv("IGUIDE_DIR", os.getcwd()) + "/" + config['Sample_Info']
             )
-        sampleList = get_sample_list(sampleInfo)
-        demultiDir = check_existing(Path(config['Demulti_Dir']))
+        sampleList = get_sample_list(sampleInfo, config)
+        demultiDir = Path(config['Seq_Path'])
         for sample in sampleList:
-            for type in read_types:
+            for type in req_read_types:
                 os.symlink( 
                     str(demultiDir / str(sample + '.' + type + '.fastq.gz')),
-                    str(analysis_directory / "process_data" / str(
+                    str(analysis_directory / "input_data" / str(
                         sample + '.' + type + '.fastq.gz'
                         )
                     )
@@ -113,7 +111,7 @@ def main( argv = sys.argv ):
         os.symlink(str(config_path), str(analysis_directory / "config.yml"))
     else:
         sys.stderr.write(
-            "Error: could not locate aboslute path to config file: '{}'.\n".format(
+            "\n  Error: could not locate aboslute path to config file: '{}'.\n".format(
                 str(config_path)))
         sys.exit(1)
     
@@ -121,7 +119,7 @@ def main( argv = sys.argv ):
         print("  '{}' setup has completed.".format(config["Run_Name"]))
     else:
         sys.stderr.write(
-            "Error: could not setup project: '{}'.\n".format(
+            "\n  Error: could not setup project: '{}'.\n".format(
                 str(config["Run_Name"])))
         sys.exit(1)
         
@@ -129,21 +127,21 @@ def main( argv = sys.argv ):
 def check_existing(path, force=False):
     if path.is_dir():
         raise SystemExit(
-            "Error: specified file '{}' exists and is a directory".format(path))
+            "\n  Error: specified file '{}' exists and is a directory.\n".format(path))
     if path.is_file() and not force:
         raise SystemExit(
-            "Error: specified file '{}' exists. Use --force to "
-            "overwrite.".format(path))
+            "\n  Error: specified file '{}' exists. Use --force to "
+            "\n  overwrite.\n".format(path))
     return path
 
 def check_existing_fastq(path, force=False):
     if path.is_file() and not force:
         print("Sample file '{}' found.".format(path))
     else:
-        print("Warning: specified sample file '{}' does not exist. "
+        print("  Warning: specified sample file '{}' does not exist. "
               "Make sure it exists before running iguide run.".format(path))
 
-def get_sample_list(sampleInfo):
+def get_sample_list(sampleInfo, config):
     sampleList = []
     for line in sampleInfo:
         items=line.split(',')

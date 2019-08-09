@@ -9,33 +9,12 @@ import re
 import yaml
 import configparser
 from pathlib import Path
-from iguidelib import import_sample_info, choose_sequence_data
+from iguidelib import import_sample_info, choose_sequence_data, get_file_path
 
 if not config:
     raise SystemExit(
         "No config file specified. Feel free to use the test config as a"
         "template to generate a config file, and specify with --configfile")
-
-# Import sampleInfo
-if ".csv" in config["Sample_Info"]:
-    delim = ","
-elif ".tsv" in config["Sample_Info"]:
-    delim = "\t"
-else:
-    raise SystemExit("Sample Info file needs to contain extention '.csv' or '.tsv'.")
-
-# Sample information
-sampleInfo = import_sample_info(
-    config["Sample_Info"], config["Sample_Name_Column"], delim)
-
-SAMPLES=sampleInfo[config["Sample_Name_Column"]]
-TYPES=config["Read_Types"]
-READS=config["Genomic_Reads"]
-R1_LEAD=choose_sequence_data(config["R1_Leading_Trim"], sampleInfo)
-R1_OVER=choose_sequence_data(config["R1_Overreading_Trim"], sampleInfo)
-R2_LEAD=choose_sequence_data(config["R2_Leading_Trim"], sampleInfo)
-R2_LEAD_ODN=choose_sequence_data(config["R2_Leading_Trim_ODN"], sampleInfo)
-R2_OVER=choose_sequence_data(config["R2_Overreading_Trim"], sampleInfo)
 
 # Working paths
 RUN = config["Run_Name"]
@@ -44,21 +23,66 @@ try:
     ROOT_DIR = os.environ["IGUIDE_DIR"]
 except KeyError:
     raise SystemExit(
-        "IGUIDE_DIR environment variable not defined. Are you sure you "
-        "activated the iguide conda environment?")
+        "\n  IGUIDE_DIR environment variable not defined. Are you sure you "
+        "\n  activated the iguide conda environment?\n ")
 RUN_DIR = ROOT_DIR + "/analysis/" + RUN
 
 # Check for directory paths
 if not os.path.isdir(ROOT_DIR):
-    raise SystemExit("Path to iGUIDE is not found. Check environmental variables.")
+    raise SystemExit("\n  Path to iGUIDE is not found. Check environmental variables.\n")
 
 # Check for sequence file paths
 if not os.path.isdir(config["Seq_Path"]):
-    raise SystemExit("Path to sequencing files is not found (Seq_Path). Check your config file.")
+    raise SystemExit("\n  Path to sequencing files is not found (Seq_Path). Check your config file.\n")
 
 # Check for config symlink to check proper run directory setup
 if not os.path.isfile(RUN_DIR + "/config.yml"):
-    raise SystemExit("Path to symbolic config is not present. Check to make sure you've run 'iguide setup' first.")
+    raise SystemExit("\n  Path to symbolic config is not present. Check to make sure you've run 'iguide setup' first.\n")
+
+# Check for sampleInfo path
+if not "Sample_Info" in config:
+    raise SystemExit("\n  Sample_Info parameter missing in config file. Please specify before continuing.\n")
+else:
+    SAMPLEINFO_PATH = get_file_path("Sample_Info", config, ROOT_DIR)
+
+# Check for suppInfo path
+if config["suppFile"]:
+    if not "Supplemental_Info" in config:
+        raise SystemExit(
+            "\n  Supplemental_Info parameter missing in config file."
+            "\n  If not including a file, please specify with '.' .\n"
+        )
+    else:
+        if config["Supplemental_Info"] == ".":
+            SUPPINFO_PATH = "."
+        else:
+            SUPPINFO_PATH = get_file_path("Supplemental_Info", config, ROOT_DIR)
+
+# Import sampleInfo
+if ".csv" in config["Sample_Info"]:
+    delim = ","
+elif ".tsv" in config["Sample_Info"]:
+    delim = "\t"
+else:
+    raise SystemExit("\n  Sample Info file needs to contain extention '.csv' or '.tsv'.\n")
+
+# Sample information
+sampleInfo = import_sample_info(
+    config["Sample_Info"], config["Sample_Name_Column"], delim)
+
+SAMPLES=sampleInfo[config["Sample_Name_Column"]]
+READ_TYPES=config["Read_Types"]
+READS=config["Genomic_Reads"]
+REQ_TYPES=READS[:]
+
+if config["UMItags"]: 
+    REQ_TYPES.append("I2")
+
+R1_LEAD=choose_sequence_data(config["R1_Leading_Trim"], sampleInfo)
+R1_OVER=choose_sequence_data(config["R1_Overreading_Trim"], sampleInfo)
+R2_LEAD=choose_sequence_data(config["R2_Leading_Trim"], sampleInfo)
+R2_LEAD_ODN=choose_sequence_data(config["R2_Leading_Trim_ODN"], sampleInfo)
+R2_OVER=choose_sequence_data(config["R2_Overreading_Trim"], sampleInfo)
 
 # Default params if not included in config
 if not "maxNcount" in config:
@@ -71,7 +95,10 @@ else:
         config["demultiCores"], snakemake.utils.available_cpu_count()
     )
 
-## Memory params
+if not "skipDemultiplexing" in config:
+    config["skipDemultiplexing"] = False
+
+## Memory and default params
 if not "demultiMB" in config:
     config["demultiMB"] = 16000
     
@@ -87,8 +114,8 @@ if not "consolMB" in config:
 if not "alignMB" in config:
     config["alignMB"] = 4000
 
-if not "coupleMB" in config:
-    config["coupleMB"] = 4000
+if not "qualCtrlMB" in config:
+    config["qualCtrlMB"] = 4000
     
 if not "assimilateMB" in config:
     config["assimilateMB"] = 4000
@@ -99,6 +126,15 @@ if not "evaluateMB" in config:
 if not "reportMB" in config:
     config["reportMB"] = 4000
   
+if not "readNamePattern" in config:
+    config["readNamePattern"] = str("'[\\w\\:\\-\\+]+'")
+
+# Regex constraints on wildcards
+wildcard_constraints:
+    sample="[\w\-\_]+",
+    read="R[12]",
+    read_type="[RI][12]",
+    req_type="[RI][12]"
 
 # Target Rules
 rule all:
@@ -112,20 +148,35 @@ rule all:
 include: "rules/arch.rules"
 
 # Processing Rules
-include: "rules/demulti.rules"
+if (config["skipDemultiplexing"]):
+    include: "rules/skip_demulti.rules"
+else:
+    include: "rules/demulti.rules"
+    
 include: "rules/trim.rules"
+
 if (config["UMItags"]):
     include: "rules/umitag.rules"
     UMIseqs = sampleInfo["barcode2"]
+else:
+    include: "rules/umitag_stub.rules"
+
 include: "rules/filt.rules"
-include: "rules/consol.rules"
+
 if (config["Aligner"] == "BLAT" or config["Aligner"] == "blat"):
+    include: "rules/consol.rules"
     include: "rules/align.blat.rules"
     include: "rules/quality.blat.rules"
 elif (config["Aligner"] == "BWA" or config["Aligner"] == "bwa"):
-    raise SystemExit("BWA aligner not supported yet.")
+    include: "rules/consol_stub.rules"
+    include: "rules/align.bwa.rules"
+    include: "rules/quality.sam.rules"
 else:
-    "Aligner: " + config["Aligner"] + " not supported."
-    "Please choose a supported option: BLAT or BWA."
+    raise SystemExit( 
+        "\n  Aligner: " + config["Aligner"] + " not currently supported."
+        "\n  If you are interested in using the aligner, please contact maintainers."
+        "\n  Please choose a supported option: BLAT or BWA.\n"
+    )
+
 include: "rules/process.rules"
 

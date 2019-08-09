@@ -14,8 +14,8 @@ def main( argv = sys.argv ):
         conda_prefix = os.environ.get("CONDA_PREFIX")
     except (KeyError, IndexError):
         raise SystemExit(
-            "Could not determine Conda prefix. Activate your iGUIDE "
-            "environment and try this command again.")
+            "\n  Could not determine Conda prefix. Activate your iGUIDE"
+            "\n  environment and try this command again.\n")
 
     usage_str = "\n  iguide %(prog)s <path/to/config.file> <options>"
 
@@ -26,7 +26,8 @@ def main( argv = sys.argv ):
     parser = argparse.ArgumentParser(
         prog = "clean", 
         usage = usage_str,
-        description = description_str
+        description = description_str,
+        allow_abbrev = False
     )
 
     parser.add_argument(
@@ -62,7 +63,7 @@ def main( argv = sys.argv ):
     
     if not iguide_directory.exists():
         sys.stderr.write(
-            "Error: could not find iGUIDE directory '{}'\n".format(
+            "\n  Error: could not find iGUIDE directory '{}'\n".format(
                 args.iguide_dir))
         sys.exit(1)
     
@@ -74,7 +75,7 @@ def main( argv = sys.argv ):
 
     if not analysis_directory.exists():
         sys.stderr.write(
-            "Error: could not find analysis directory '{}'\n".format(
+            "\n  Error: could not find analysis directory '{}'\n".format(
                 str(analysis_directory)))
         sys.exit(1)
 
@@ -83,12 +84,9 @@ def main( argv = sys.argv ):
         
         files_to_clean = []
         for directory in directories_to_clean:
-            directory = analysis_directory / directory
-            files = os.listdir( directory )
-            for file in files:
-                files_to_clean = files_to_clean + [
-                  os.path.join( directory, file )
-                ]
+            for r, d, f in os.walk( analysis_directory / directory ):
+                for file in f:
+                    files_to_clean.append(os.path.join( r, file ))
           
         for file in files_to_clean:
             if Path( file ).exists():
