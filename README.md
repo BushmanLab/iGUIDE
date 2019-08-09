@@ -1,6 +1,6 @@
 ## iGUIDE - improved Genome-wide Unbiased Identification of Double-strand DNA break Events
 [![Build Status](https://travis-ci.org/bushmanlab/iGUIDE.svg?branch=master)](https://travis-ci.org/bushmanlab/iGUIDE)
-[![CircleCI](https://circleci.com/gh/bushmanlab/iGUIDE.svg?style=svg)](https://circleci.com/gh/bushmanlab/iGUIDE)
+[![CircleCI](https://circleci.com/gh/BushmanLab/iGUIDE.svg?style=svg)](https://circleci.com/gh/bushmanlab/iGUIDE)
 [![Documentation Status](https://readthedocs.org/projects/iguide/badge/?version=latest)](http://iguide.readthedocs.io/en/latest/?badge=latest)
 [![DOI](https://zenodo.org/badge/88088016.svg)](https://zenodo.org/badge/latestdoi/88088016)
 
